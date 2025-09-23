@@ -104,7 +104,6 @@ def analyze_usage(df):
         print("No memory spikes detected in the last week.")
 
 # Linear Regression
-
 def run_prediction(df):
     # Work on a copy to avoid mutating the caller's DataFrame
     df_work = df.copy()
@@ -130,7 +129,7 @@ def run_prediction(df):
     df_model = df_hourly.dropna().copy()
     if df_model.empty:
         print("Not enough data after resampling to run prediction.")
-        return
+        return None
 
     # Add hour features (handle both naive and tz-aware indexes)
     df_model.loc[:, 'hour'] = df_model.index.hour
@@ -161,55 +160,38 @@ def run_prediction(df):
     if predicted[1] > 85:
         print("⚠️ Warning: Memory usage predicted to stay high!")
 
+    return predicted  # return predicted array for further use
 
+# KMeans
 def run_kmeans(df, n_clusters=3, resample_rule='1h', visualize=True, random_state=42):
-    """
-    Run KMeans on hourly-aggregated system metrics and print/visualize cluster summaries.
-    - df: original dataframe with timestamp column (naive UTC)
-    - n_clusters: number of clusters to find (default 3)
-    - resample_rule: '1h' for hourly, '30min' for half-hour, etc.
-    - visualize: if True, plot PCA 2D and CPU vs Memory scatter
-    """
-    # 1) Defensive copy + set index
     df_work = df.copy()
     df_work = df_work.set_index('timestamp')
 
-    # Ensure numeric dtypes for metrics
     metric_cols = ['cpu', 'memory', 'disk', 'battery']
     for col in metric_cols:
         df_work[col] = pd.to_numeric(df_work[col], errors='coerce')
 
-    # 2) Resample (aggregate) to reduce noise
     df_hourly = df_work[metric_cols].resample(resample_rule).mean(numeric_only=True)
-
-    # 3) Drop rows with missing values and make a copy
     df_model = df_hourly.dropna().copy()
     if df_model.empty:
         print("Not enough data after resampling to run KMeans.")
-        return
+        return None, None
 
-    # 4) Create time-of-day features
     df_model['hour'] = df_model.index.hour
-    # handle tz-naive vs tz-aware index safely
     if df_model.index.tz is None:
         df_model['hour_local'] = df_model.index.tz_localize('UTC').tz_convert('Asia/Kolkata').hour
     else:
         df_model['hour_local'] = df_model.index.tz_convert('Asia/Kolkata').hour
 
-    # Ensure we have enough samples for requested clusters
     if len(df_model) < n_clusters:
-        print(f"Not enough samples ({len(df_model)}) for n_clusters={n_clusters}. Try fewer clusters or gather more data.")
-        return
+        print(f"Not enough samples ({len(df_model)}) for n_clusters={n_clusters}.")
+        return None, None
 
-    # 5) Feature selection
     features = ['cpu', 'memory', 'disk', 'battery', 'hour', 'hour_local']
     X = df_model[features].values
-
-    # 6) Scale features (important for distance-based clustering)
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # 7) Optional: compute silhouette score for informational purposes (only if n_clusters > 1)
     if n_clusters > 1:
         k_temp = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
         labels_temp = k_temp.fit_predict(X_scaled)
@@ -217,47 +199,37 @@ def run_kmeans(df, n_clusters=3, resample_rule='1h', visualize=True, random_stat
     else:
         sil = None
 
-    # 8) Fit KMeans
     kmeans = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
     kmeans.fit(X_scaled)
     labels = kmeans.labels_
 
-    # 9) Attach labels to df_model (cluster ids)
-    df_model = df_model.copy()  # ensure we have an independent frame
+    df_model = df_model.copy()
     df_model['cluster'] = labels
 
-    # 10) Compute cluster centers back in original feature scale
     centers_scaled = kmeans.cluster_centers_
     centers = scaler.inverse_transform(centers_scaled)
     cluster_summary = pd.DataFrame(centers, columns=features)
     cluster_summary.index.name = 'cluster'
 
-    # 11) Add counts / proportions
     counts = df_model['cluster'].value_counts().sort_index()
     cluster_summary['count'] = counts.values
     cluster_summary['proportion_%'] = (counts.values / len(df_model) * 100).round(2)
 
-    # 12) Interpret clusters by CPU intensity (label high/medium/low)
-    # sort clusters by mean cpu
     cpu_order = cluster_summary['cpu'].sort_values(ascending=False).index.tolist()
     labels_map = {}
-    human_labels = ['High load', 'Medium load', 'Low load']  # will map top->High
-    # create mapping robustly for any k
+    human_labels = ['High load', 'Medium load', 'Low load']
     for i, cl in enumerate(cpu_order):
         lab = human_labels[i] if i < len(human_labels) else f"Cluster {i}"
         labels_map[cl] = lab
-    # apply mapping to cluster_summary and df_model
     cluster_summary['meaning'] = [labels_map[c] for c in cluster_summary.index]
     df_model['cluster_meaning'] = df_model['cluster'].map(labels_map)
 
-    # 13) Print summary
     print("\nKMeans cluster summary (centers in original feature scale):")
     print(cluster_summary[['cpu','memory','disk','battery','count','proportion_%','meaning']])
 
     if sil is not None:
         print(f"\nSilhouette score for k={n_clusters}: {sil:.3f}")
 
-    # 14) Times of day for each cluster
     print("\nMost common local hour for each cluster (mode of hour_local):")
     for cl in sorted(df_model['cluster'].unique()):
         mode_hour = df_model[df_model['cluster'] == cl]['hour_local'].mode()
@@ -266,9 +238,7 @@ def run_kmeans(df, n_clusters=3, resample_rule='1h', visualize=True, random_stat
         else:
             print(f"  Cluster {cl}: no mode hour found")
 
-    # 15) Show simple visualizations (PCA 2D + CPU vs Memory scatter)
     if visualize:
-        # PCA to 2D for visualization
         pca = PCA(n_components=2)
         X_pca = pca.fit_transform(X_scaled)
 
@@ -279,7 +249,6 @@ def run_kmeans(df, n_clusters=3, resample_rule='1h', visualize=True, random_stat
         plt.xlabel('PC1'); plt.ylabel('PC2')
         plt.colorbar(scatter, label='cluster id')
 
-        # CPU vs Memory colored by cluster
         plt.subplot(1,2,2)
         plt.scatter(df_model['cpu'], df_model['memory'], c=df_model['cluster'], cmap='viridis', alpha=0.7)
         plt.xlabel('CPU %'); plt.ylabel('Memory %')
@@ -288,9 +257,24 @@ def run_kmeans(df, n_clusters=3, resample_rule='1h', visualize=True, random_stat
         plt.tight_layout()
         plt.show()
 
-    # 16) Return df_model and cluster_summary if caller wants to use them
     return df_model, cluster_summary
 
+# New combined function
+def predict_and_analyze(df):
+    print("\n=== Combined Prediction & Clustering ===")
+    predicted = run_prediction(df)
+    if predicted is None:
+        print("Skipping KMeans due to insufficient data.")
+        return
+    df_model, cluster_summary = run_kmeans(df, visualize=True)
+    if df_model is None:
+        print("Skipping cluster labeling due to insufficient data.")
+        return
+
+    # Map predicted CPU to nearest cluster
+    cpu_diffs = (cluster_summary['cpu'] - predicted[0]).abs()
+    nearest_cluster = cpu_diffs.idxmin()
+    print(f"\nPredicted CPU falls into cluster: {cluster_summary.loc[nearest_cluster,'meaning']}")
 
 def main():
     df = load_data()
@@ -303,6 +287,7 @@ def main():
         print("4. Show daily stats")
         print("5. Run KMeans")
         print("6. Exit")
+        print("7. Predict next hour + cluster analysis")  # new option
 
         choice = input("Enter your choice: ")
 
@@ -318,8 +303,10 @@ def main():
             run_kmeans(df)
         elif choice == '6':
             break
+        elif choice == '7':
+            predict_and_analyze(df)
         else:
-            print("Invalid choice! Please enter 1-4.")
+            print("Invalid choice! Please enter 1-7.")
 
 if __name__ == "__main__":
     main()
