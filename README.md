@@ -7,6 +7,8 @@ Brother Eye is a real-time system monitoring tool that streams live hardware sta
 
 It’s designed to act as an intelligent, always-on “eye” that watches your system health and can eventually support interactive features like system control, notifications, and AI integration.
 
+Currently working on better UI and ML algorithms to run on it. Future updates would be security concerns.
+
 🧠 Project Overview
 
 Brother Eye consists of two main components:
