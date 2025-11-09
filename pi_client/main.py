@@ -1,372 +1,668 @@
-import json
-import os
-import math
-import threading
-import time
-
-from kivy.app import App
-from kivy.uix.widget import Widget
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.gridlayout import GridLayout
-from kivy.uix.label import Label
-from kivy.uix.button import Button
-from kivy.uix.scrollview import ScrollView
-from kivy.properties import NumericProperty, StringProperty
-from kivy.clock import Clock
-from kivy.graphics import Color, Line, Rectangle, Ellipse
-from kivy.core.text import Label as CoreLabel
-from kivy.core.window import Window
-
+from nicegui import ui, app, run
 import socketio
+import threading, time
+import os
+from dotenv import load_dotenv
+load_dotenv()
+SECRET_TOKEN = os.getenv("AUTH_TOKEN")
 
-# ----------------------------
-# Config Loader
-# ----------------------------
-def load_config(config_path="config.json"):
-    if not os.path.exists(config_path):
-        return {
-            "server": {"host": "127.0.0.1", "port": 8000, "protocol": "http"},
-            "ui": {"theme": "dark", "update_interval": 1, "fullscreen": True}
-        }
+SERVER_URL = "http://192.168.1.14:8000"  
+REFRESH_INTERVAL = 1                     
+
+from pi_client.db_manager import init_db, insert_stats
+init_db()
+
+sio = socketio.Client()
+stats_data = {"cpu": 0, "memory": 0, "disk": 0, "gpu": 0, "battery": 0}
+connection_status = "Disconnected"
+latest_action_message = ""
+
+def connect_socket():
+    global connection_status
     try:
-        with open(config_path, 'r') as f:
-            return json.load(f)
-    except:
-        return {
-            "server": {"host": "127.0.0.1", "port": 8000, "protocol": "http"},
-            "ui": {"theme": "dark", "update_interval": 1, "fullscreen": True}
-        }
+        sio.connect(SERVER_URL)
+        connection_status = "Connected"
+    except Exception as e:
+        print("Socket connection failed:", e)
+        connection_status = "Disconnected"
+        time.sleep(5)
+        connect_socket()
 
-config = load_config()
-server_config = config['server']
-server_url = f"{server_config['protocol']}://{server_config['host']}:{server_config['port']}"
+@sio.event
+def connect():
+    global connection_status
+    connection_status = "✓ Connected"
 
-# Set window background
-Window.clearcolor = (0, 0, 0, 1)
+@sio.event
+def disconnect():
+    global connection_status
+    connection_status = "✗ Disconnected"
 
-# ----------------------------
-# Speedometer Widget
-# ----------------------------
-class Speedometer(Widget):
-    value = NumericProperty(0)
-    max_value = NumericProperty(100)
-    label = StringProperty("")
+@sio.on("stats_update")
+def on_stats(data):
+    for k in stats_data:
+        stats_data[k] = data.get(k, 0)
+    insert_stats(
+        cpu=data.get('cpu', 0),
+        memory=data.get('memory', 0),
+        disk=data.get('disk', 0),
+        gpu=data.get('gpu', 0),
+        battery=data.get('battery', 0)
+    )
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.bind(pos=self.update_canvas, size=self.update_canvas, value=self.update_canvas)
+@sio.on("action_response")
+def on_action_response(data):
+    global latest_action_message
+    latest_action_message = data.get("message", str(data))
+    print(f"Action Response Received: {latest_action_message}")
 
-    def update_canvas(self, *args):
-        self.canvas.clear()
-        size = min(self.width, self.height)
-        radius = size * 0.35
-        cx, cy = self.center_x, self.center_y
-        start_angle = 220
-        end_angle = -40
-        total_range = start_angle - end_angle
-        progress = min(self.value / self.max_value, 1.0)
-        needle_angle = start_angle - (progress * total_range)
+threading.Thread(target=connect_socket, daemon=True).start()
 
-        with self.canvas:
-            Color(1, 1, 1, 0.3)
-            Line(circle=(cx, cy, radius + 5, start_angle, end_angle), width=2)
+# ------------- UI COMPONENTS -------------
 
-            Color(1, 1, 1, 0.5)
-            for i in range(0, 11):
-                tick_progress = i / 10.0
-                tick_angle = start_angle - (tick_progress * total_range)
-                tick_rad = math.radians(tick_angle)
-                x1 = cx + (radius + 10) * math.cos(tick_rad)
-                y1 = cy + (radius + 10) * math.sin(tick_rad)
-                inner_radius = radius - 5 if i % 2 == 0 else radius
-                tick_width = 2 if i % 2 == 0 else 1
-                x2 = cx + inner_radius * math.cos(tick_rad)
-                y2 = cy + inner_radius * math.sin(tick_rad)
-                Line(points=[x1, y1, x2, y2], width=tick_width)
+ui.page_title("BrotherEye Dashboard")
+ui.colors(primary="#00ffff", secondary="#1a1a1a", accent="#ff0080")
 
-            danger_start = start_angle - (0.8 * total_range)
-            Color(1, 0, 0, 0.3)
-            Line(circle=(cx, cy, radius, danger_start, end_angle), width=8)
-            Color(1, 1, 1, 0.2)
-            Line(circle=(cx, cy, radius, start_angle, danger_start), width=8)
+# Enhanced Cyberpunk CSS
+ui.add_head_html('''
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;500;700&display=swap');
+    
+    body {
+        background: #000000 !important;
+        color: #e0e0e0 !important;
+        font-family: 'Rajdhani', sans-serif !important;
+        overflow-x: hidden;
+    }
+    
+    body::before {
+        content: '';
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: 
+            linear-gradient(135deg, rgba(0,255,255,0.03) 0%, rgba(255,0,128,0.03) 100%),
+            repeating-linear-gradient(0deg, rgba(0,255,255,0.03) 0px, transparent 2px, transparent 4px, rgba(0,255,255,0.03) 6px),
+            #000000;
+        pointer-events: none;
+        z-index: 0;
+    }
+    
+    .q-page {
+        background: transparent !important;
+        position: relative;
+        z-index: 1;
+    }
+    
+    /* Speedometer Enhancements */
+    .speedometer-container {
+        position: relative;
+        width: 320px;
+        height: 320px;
+        margin: 20px;
+        filter: drop-shadow(0 0 30px rgba(0,255,255,0.3));
+    }
+    
+    .speedometer {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: 
+            radial-gradient(circle at 30% 30%, rgba(0,255,255,0.1), transparent),
+            radial-gradient(circle at 70% 70%, rgba(255,0,128,0.1), transparent),
+            radial-gradient(circle at 50% 50%, #0a0a0a, #000000);
+        box-shadow: 
+            0 0 40px rgba(0,255,255,0.4) inset,
+            0 0 60px rgba(255,0,128,0.2) inset,
+            0 8px 32px rgba(0,0,0,0.9),
+            0 0 80px rgba(0,255,255,0.15);
+        position: relative;
+        border: 2px solid rgba(0,255,255,0.3);
+        animation: pulse-border 3s ease-in-out infinite;
+    }
+    
+    @keyframes pulse-border {
+        0%, 100% { border-color: rgba(0,255,255,0.3); }
+        50% { border-color: rgba(0,255,255,0.6); }
+    }
+    
+    .speedometer-ticks {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        top: 0;
+        left: 0;
+    }
+    
+    .speedometer-needle {
+        position: absolute;
+        width: 5px;
+        height: 48%;
+        background: linear-gradient(to top, #00ffff, #00ffff, rgba(0,255,255,0.5));
+        bottom: 50%;
+        left: 50%;
+        transform-origin: bottom center;
+        transform: translateX(-50%) rotate(-135deg);
+        transition: transform 0.5s cubic-bezier(0.4, 0.0, 0.2, 1);
+        box-shadow: 0 0 20px rgba(0,255,255,1), 0 0 40px rgba(0,255,255,0.5);
+        border-radius: 3px 3px 0 0;
+        filter: drop-shadow(0 0 10px rgba(0,255,255,0.8));
+    }
+    
+    .speedometer-center {
+        position: absolute;
+        width: 40px;
+        height: 40px;
+        background: radial-gradient(circle, #00ffff, #008b8b);
+        border-radius: 50%;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        box-shadow: 
+            0 0 30px rgba(0,255,255,1),
+            0 0 60px rgba(0,255,255,0.5),
+            0 0 20px rgba(0,255,255,0.8) inset;
+        border: 3px solid rgba(0,255,255,0.5);
+        animation: glow-center 2s ease-in-out infinite;
+    }
+    
+    @keyframes glow-center {
+        0%, 100% { box-shadow: 0 0 30px rgba(0,255,255,1), 0 0 60px rgba(0,255,255,0.5); }
+        50% { box-shadow: 0 0 50px rgba(0,255,255,1), 0 0 100px rgba(0,255,255,0.7); }
+    }
+    
+    .speedometer-value {
+        position: absolute;
+        bottom: 35%;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 42px;
+        font-weight: 900;
+        color: #00ffff;
+        text-shadow: 
+            0 0 20px rgba(0,255,255,1),
+            0 0 40px rgba(0,255,255,0.5),
+            0 2px 4px rgba(0,0,0,0.8);
+        font-family: 'Orbitron', monospace;
+        letter-spacing: 2px;
+    }
+    
+    .speedometer-label {
+        position: absolute;
+        bottom: 22%;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 18px;
+        font-weight: 700;
+        color: rgba(0,255,255,0.7);
+        text-transform: uppercase;
+        letter-spacing: 4px;
+        text-shadow: 0 0 10px rgba(0,255,255,0.5);
+    }
+    
+    /* Memory Speedometer - Pink Theme */
+    .mem-speedometer-needle {
+        background: linear-gradient(to top, #ff0080, #ff0080, rgba(255,0,128,0.5)) !important;
+        box-shadow: 0 0 20px rgba(255,0,128,1), 0 0 40px rgba(255,0,128,0.5) !important;
+        filter: drop-shadow(0 0 10px rgba(255,0,128,0.8)) !important;
+    }
+    
+    .mem-speedometer-center {
+        background: radial-gradient(circle, #ff0080, #8b0045) !important;
+        box-shadow: 
+            0 0 30px rgba(255,0,128,1),
+            0 0 60px rgba(255,0,128,0.5),
+            0 0 20px rgba(255,0,128,0.8) inset !important;
+        border: 3px solid rgba(255,0,128,0.5) !important;
+    }
+    
+    .mem-speedometer-value {
+        color: #ff0080 !important;
+        text-shadow: 
+            0 0 20px rgba(255,0,128,1),
+            0 0 40px rgba(255,0,128,0.5),
+            0 2px 4px rgba(0,0,0,0.8) !important;
+    }
+    
+    .mem-speedometer-label {
+        color: rgba(255,0,128,0.7) !important;
+        text-shadow: 0 0 10px rgba(255,0,128,0.5) !important;
+    }
+    
+    /* Card Styling */
+    .cyber-card {
+        background: linear-gradient(145deg, rgba(10,10,10,0.95), rgba(5,5,5,0.98)) !important;
+        border: 1px solid rgba(0,255,255,0.3) !important;
+        box-shadow: 
+            0 8px 32px rgba(0,0,0,0.8),
+            0 0 20px rgba(0,255,255,0.1) !important;
+        border-radius: 16px !important;
+        backdrop-filter: blur(10px) !important;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .cyber-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(0,255,255,0.1), transparent);
+        animation: scan 3s infinite;
+    }
+    
+    @keyframes scan {
+        0% { left: -100%; }
+        100% { left: 100%; }
+    }
+    
+    /* Fuel Gauge Enhancement */
+    .fuel-container {
+        width: 100%;
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+    
+    .fuel-gauge {
+        width: 100%;
+        height: 50px;
+        background: 
+            linear-gradient(to right, rgba(0,255,255,0.1), rgba(0,255,255,0.05)),
+            #0a0a0a;
+        border: 2px solid rgba(0,255,255,0.4);
+        border-radius: 25px;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 
+            0 0 30px rgba(0,0,0,0.8) inset,
+            0 0 20px rgba(0,255,255,0.2);
+    }
+    
+    .fuel-fill {
+        height: 100%;
+        background: linear-gradient(90deg, 
+            #ff0080 0%, 
+            #ff0080 30%,
+            #ffaa00 60%, 
+            #00ffff 90%,
+            #00ff88 100%);
+        transition: width 0.5s cubic-bezier(0.4, 0.0, 0.2, 1);
+        box-shadow: 0 0 30px rgba(0,255,255,0.6);
+        border-radius: 23px;
+        position: relative;
+        animation: flow 2s linear infinite;
+    }
+    
+    @keyframes flow {
+        0% { background-position: 0% 50%; }
+        100% { background-position: 200% 50%; }
+    }
+    
+    .fuel-fill::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(to bottom, rgba(255,255,255,0.2), transparent);
+        border-radius: 23px;
+    }
+    
+    /* Digital Display */
+    .digital-display {
+        background: rgba(0,0,0,0.9) !important;
+        border: 2px solid rgba(0,255,255,0.4) !important;
+        box-shadow: 
+            0 0 30px rgba(0,255,255,0.2) inset,
+            0 0 20px rgba(0,255,255,0.1) !important;
+        font-family: 'Orbitron', monospace !important;
+        color: #00ffff !important;
+        text-shadow: 0 0 15px rgba(0,255,255,0.8) !important;
+        position: relative;
+    }
+    
+    .digital-display::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, rgba(0,255,255,0.5), transparent);
+        animation: scan-line 2s linear infinite;
+    }
+    
+    @keyframes scan-line {
+        0% { transform: translateY(0); opacity: 0; }
+        50% { opacity: 1; }
+        100% { transform: translateY(50px); opacity: 0; }
+    }
+    
+    /* Action Buttons */
+    .action-btn {
+        background: rgba(0,0,0,0.8) !important;
+        border: 2px solid rgba(0,255,255,0.4) !important;
+        transition: all 0.3s ease !important;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .action-btn:hover {
+        border-color: rgba(0,255,255,0.8) !important;
+        box-shadow: 
+            0 0 20px rgba(0,255,255,0.4),
+            0 0 40px rgba(0,255,255,0.2) !important;
+        transform: translateY(-2px) scale(1.05);
+    }
+    
+    .action-btn::before {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 0;
+        height: 0;
+        border-radius: 50%;
+        background: rgba(0,255,255,0.2);
+        transform: translate(-50%, -50%);
+        transition: width 0.3s, height 0.3s;
+    }
+    
+    .action-btn:hover::before {
+        width: 200%;
+        height: 200%;
+    }
+    
+    /* ML Analysis Box */
+    .ml-output {
+        background: rgba(0,0,0,0.95) !important;
+        border: 2px solid rgba(255,0,128,0.4) !important;
+        box-shadow: 
+            0 0 30px rgba(255,0,128,0.2) inset,
+            0 8px 32px rgba(0,0,0,0.8) !important;
+        font-family: 'Rajdhani', monospace !important;
+        color: #00ffff !important;
+        min-height: 200px;
+        position: relative;
+        overflow: auto;
+    }
+    
+    .ml-output::before {
+        content: '>';
+        position: absolute;
+        left: 10px;
+        top: 10px;
+        color: #ff0080;
+        font-weight: bold;
+        animation: blink 1s infinite;
+    }
+    
+    @keyframes blink {
+        0%, 49% { opacity: 1; }
+        50%, 100% { opacity: 0; }
+    }
+    
+    /* Header Enhancements */
+    .cyber-header {
+        background: rgba(0,0,0,0.95) !important;
+        border-bottom: 2px solid rgba(0,255,255,0.4) !important;
+        box-shadow: 0 4px 30px rgba(0,255,255,0.2) !important;
+        backdrop-filter: blur(10px) !important;
+    }
+    
+    .glitch {
+        animation: glitch 3s infinite;
+    }
+    
+    @keyframes glitch {
+        0%, 90%, 100% { transform: translate(0); }
+        91% { transform: translate(-2px, 2px); }
+        92% { transform: translate(2px, -2px); }
+        93% { transform: translate(-2px, 2px); }
+        94% { transform: translate(2px, -2px); }
+    }
+    
+    /* Metric Labels */
+    .metric-label {
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 3px;
+        color: rgba(0,255,255,0.6);
+        text-transform: uppercase;
+        margin-bottom: 8px;
+    }
+    
+    /* Button Icons */
+    .btn-icon {
+        width: 32px;
+        height: 32px;
+        filter: drop-shadow(0 0 8px currentColor);
+    }
+</style>
+''')
 
-            Color(1, 0, 0, 1) if self.value >= 80 else Color(1, 1, 1, 1)
-            needle_rad = math.radians(needle_angle)
-            needle_length = radius - 10
-            x_end = cx + needle_length * math.cos(needle_rad)
-            y_end = cy + needle_length * math.sin(needle_rad)
-            Line(points=[cx, cy, x_end, y_end], width=3)
-            Color(1, 0, 0, 1)
-            Ellipse(pos=(cx - 5, cy - 5), size=(10, 10))
-
-        # Add percentage labels at key positions (0, 25, 50, 75, 100)
-        from kivy.graphics import PushMatrix, PopMatrix, Rotate, Translate
-        label_positions = [(0, "0"), (0.25, "25"), (0.5, "50"), (0.75, "75"), (1.0, "100")]
-        for progress, text in label_positions:
-            angle = start_angle - (progress * total_range)
-            angle_rad = math.radians(angle)
-            label_distance = radius + 25
-            label_x = cx + label_distance * math.cos(angle_rad)
-            label_y = cy + label_distance * math.sin(angle_rad)
-            
-            label = CoreLabel(text=text, font_size=12)
-            label.refresh()
-            texture = label.texture
-            with self.canvas:
-                Color(1, 1, 1, 0.8)
-                Rectangle(texture=texture, pos=(label_x - texture.width/2, label_y - texture.height/2), size=texture.size)
-
-        # Center value display
-        center_label = CoreLabel(text=f"{int(self.value)}%", font_size=20, bold=True)
-        center_label.refresh()
-        center_texture = center_label.texture
-        with self.canvas:
-            Color(1, 1, 1, 1)
-            Rectangle(texture=center_texture, pos=(cx - center_texture.width/2, cy - radius/2), size=center_texture.size)
-
-# ----------------------------
-# Fuel Gauge Widget
-# ----------------------------
-class FuelGauge(Widget):
-    value = NumericProperty(0)
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.bind(pos=self.update_canvas, size=self.update_canvas, value=self.update_canvas)
-
-    def update_canvas(self, *args):
-        self.canvas.clear()
-        bar_width = self.width * 0.8
-        bar_height = 40
-        bar_x = self.center_x - bar_width / 2
-        bar_y = self.center_y - bar_height / 2
-
-        with self.canvas:
-            Color(1, 1, 1, 0.5)
-            Line(rectangle=(bar_x, bar_y, bar_width, bar_height), width=2)
-            Color(0.1, 0.1, 0.1, 1)
-            Rectangle(pos=(bar_x + 2, bar_y + 2), size=(bar_width - 4, bar_height - 4))
-            fill_width = (bar_width - 8) * (self.value / 100)
-            if self.value < 20:
-                Color(1, 0, 0, 1)
-            elif self.value < 50:
-                Color(1, 1, 0, 1)
-            else:
-                Color(1, 1, 1, 1)
-            Rectangle(pos=(bar_x + 4, bar_y + 4), size=(fill_width, bar_height - 8))
-
-# ----------------------------
-# Digital Readout Widget
-# ----------------------------
-class DigitalReadout(BoxLayout):
-    name = StringProperty("")
-    value = StringProperty("--")
-    unit = StringProperty("")
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.orientation = 'vertical'
-        self.padding = 10
-        self.name_label = Label(text=self.name, font_size=14, color=[0.7,0.7,0.7,1], size_hint_y=0.3)
-        self.value_label = Label(text=f"{self.value} {self.unit}", font_size=28, bold=True, color=[1,1,1,1], size_hint_y=0.7)
-        self.add_widget(self.name_label)
-        self.add_widget(self.value_label)
-
-    def update(self, value, unit=None):
-        self.value = f"{value:.1f}" if isinstance(value,(int,float)) else str(value)
-        if unit: self.unit = unit
-        self.value_label.text = f"{self.value} {self.unit}"
-
-# ----------------------------
-# Dashboard Screen (Scrollable)
-# ----------------------------
-class DashboardScreen(BoxLayout):
-    connection_status = StringProperty("Disconnected")
-    last_update = StringProperty("Never")
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.orientation = 'vertical'
-        self.padding = 10
-
-        # ScrollView
-        scroll = ScrollView(size_hint=(1,1))
-        self.scroll_layout = BoxLayout(orientation='vertical', size_hint_y=None, spacing=20)
-        self.scroll_layout.bind(minimum_height=self.scroll_layout.setter('height'))
-        scroll.add_widget(self.scroll_layout)
-        self.add_widget(scroll)
-
-        # Header
-        header = BoxLayout(orientation='horizontal', size_hint_y=None, height=50)
-        self.title_label = Label(
-            text="[b]BROTHER EYE[/b]",
-            markup=True,
-            font_size=32,
-            size_hint_x=0.7,
-            color=[1, 0, 0, 1],  # Red color
-            halign='left',
-            valign='middle'
+# Header with cyberpunk styling
+with ui.header().classes("cyber-header"):
+    with ui.row().classes("w-full justify-between items-center p-4"):
+        ui.label("⚡ BROTHEREYE").classes("text-4xl font-bold tracking-widest glitch").style(
+            "color: #00ffff; text-shadow: 0 0 20px rgba(0,255,255,0.8), 2px 2px 0 #ff0080; font-family: 'Orbitron', monospace;"
         )
-        self.title_label.bind(size=self.title_label.setter('text_size'))
-        self.status_label = Label(text=self.connection_status, font_size=16, size_hint_x=0.3)
-        header.add_widget(self.title_label)
-        header.add_widget(self.status_label)
-        self.scroll_layout.add_widget(header)
-
-        # Speedometers with labels
-        speed_container = BoxLayout(orientation='horizontal', size_hint_y=None, height=280, spacing=40)
-        
-        # CPU Speedometer
-        cpu_box = BoxLayout(orientation='vertical', spacing=5)
-        self.cpu_speedometer = Speedometer(label="CPU")
-        cpu_label = Label(text="[b]CPU[/b]", markup=True, font_size=18, size_hint_y=None, height=30)
-        cpu_box.add_widget(self.cpu_speedometer)
-        cpu_box.add_widget(cpu_label)
-        speed_container.add_widget(cpu_box)
-        
-        # RAM Speedometer
-        ram_box = BoxLayout(orientation='vertical', spacing=5)
-        self.ram_speedometer = Speedometer(label="RAM")
-        ram_label = Label(text="[b]RAM[/b]", markup=True, font_size=18, size_hint_y=None, height=30)
-        ram_box.add_widget(self.ram_speedometer)
-        ram_box.add_widget(ram_label)
-        speed_container.add_widget(ram_box)
-        
-        self.scroll_layout.add_widget(speed_container)
-
-        # Battery Gauge with label
-        battery_container = BoxLayout(orientation='vertical', size_hint_y=None, height=100, spacing=5)
-        battery_label = Label(text="[b]BATTERY[/b]", markup=True, font_size=16, size_hint_y=None, height=25)
-        battery_container.add_widget(battery_label)
-        self.fuel_gauge = FuelGauge()
-        battery_container.add_widget(self.fuel_gauge)
-        self.scroll_layout.add_widget(battery_container)
-
-        # Digital Readouts
-        readouts = GridLayout(cols=3, spacing=20, size_hint_y=None, height=100)
-        self.gpu_readout = DigitalReadout(name="GPU", unit="%")
-        self.disk_readout = DigitalReadout(name="DISK", unit="%")
-        self.ram_readout = DigitalReadout(name="MEMORY", unit="%")
-        readouts.add_widget(self.gpu_readout)
-        readouts.add_widget(self.disk_readout)
-        readouts.add_widget(self.ram_readout)
-        self.scroll_layout.add_widget(readouts)
-
-        # Separator between stats and actions
-        separator = BoxLayout(size_hint_y=None, height=100)
-        self.scroll_layout.add_widget(separator)
-
-        # Action Control Section Header
-        action_header = Label(
-            text="[b]ACTION CONTROL[/b]",
-            markup=True,
-            font_size=24,
-            size_hint_y=None,
-            height=60
+        status_label = ui.label(connection_status).classes("text-lg font-semibold px-6 py-2 rounded-lg").style(
+            "background: rgba(0,0,0,0.8); border: 2px solid rgba(0,255,255,0.4);"
         )
-        self.scroll_layout.add_widget(action_header)
 
-        # Action Buttons Section
-        self.action_layout = BoxLayout(orientation='vertical', size_hint_y=None, spacing=15, padding=[20, 10, 20, 10])
-        self.scroll_layout.add_widget(self.action_layout)
+# Main speedometers section
+with ui.row().classes("justify-center items-center w-full mt-8 mb-4"):
+    # CPU Speedometer
+    with ui.column().classes("items-center"):
+        cpu_speedometer = ui.html(content='''
+            <div class="speedometer-container">
+                <div class="speedometer">
+                    <svg class="speedometer-ticks" viewBox="0 0 320 320">
+                        <circle cx="160" cy="160" r="130" fill="none" stroke="rgba(0,255,255,0.2)" stroke-width="1"/>
+                        <circle cx="160" cy="160" r="120" fill="none" stroke="#00ffff" stroke-width="1" opacity="0.3" 
+                                stroke-dasharray="5 10"/>
+                        <circle cx="160" cy="160" r="110" fill="none" stroke="rgba(0,255,255,0.1)" stroke-width="1"/>
+                    </svg>
+                    <div class="speedometer-needle" id="cpu-needle"></div>
+                    <div class="speedometer-center"></div>
+                    <div class="speedometer-value" id="cpu-value">0%</div>
+                    <div class="speedometer-label">CPU</div>
+                </div>
+            </div>
+        ''', sanitize=False)
+    
+    # Memory Speedometer
+    with ui.column().classes("items-center"):
+        mem_speedometer = ui.html(content='''
+            <div class="speedometer-container">
+                <div class="speedometer" style="border-color: rgba(255,0,128,0.3);">
+                    <svg class="speedometer-ticks" viewBox="0 0 320 320">
+                        <circle cx="160" cy="160" r="130" fill="none" stroke="rgba(255,0,128,0.2)" stroke-width="1"/>
+                        <circle cx="160" cy="160" r="120" fill="none" stroke="#ff0080" stroke-width="1" opacity="0.3" 
+                                stroke-dasharray="5 10"/>
+                        <circle cx="160" cy="160" r="110" fill="none" stroke="rgba(255,0,128,0.1)" stroke-width="1"/>
+                    </svg>
+                    <div class="speedometer-needle mem-speedometer-needle" id="mem-needle"></div>
+                    <div class="speedometer-center mem-speedometer-center"></div>
+                    <div class="speedometer-value mem-speedometer-value" id="mem-value">0%</div>
+                    <div class="speedometer-label mem-speedometer-label">MEMORY</div>
+                </div>
+            </div>
+        ''', sanitize=False)
 
-        self.add_action_button("Open Chrome", "open_app", {"name":"chrome"})
-        self.add_action_button("Close Chrome", "close_app", {"name":"chrome"})
-        self.add_action_button("Open VSCode", "open_app", {"name":"vscode"})
-        self.add_action_button("Close VSCode", "close_app", {"name":"Code.exe"})
-        self.add_action_button("Run Demo Script", "run_script", {"path": r"C:\brothereye\demo.py"})
+# Battery Fuel Gauge - Full Width
+with ui.card().classes("cyber-card p-8 mx-8 mt-8"):
+    ui.label("⚡ POWER LEVEL").classes("text-2xl font-bold text-center mb-4").style(
+        "color: #00ffff; font-family: 'Orbitron', monospace; text-shadow: 0 0 10px rgba(0,255,255,0.8);"
+    )
+    battery_label = ui.label("---%").classes("text-5xl font-bold text-center mb-4").style(
+        "color: #00ffff; font-family: 'Orbitron', monospace; text-shadow: 0 0 20px rgba(0,255,255,0.8);"
+    )
+    with ui.row().classes("fuel-container"):
+        battery_gauge = ui.html(content='<div class="fuel-gauge"><div class="fuel-fill" id="battery-fill" style="width: 0%"></div></div>', sanitize=False)
 
-        # Log Label
-        self.log_label = Label(text="", size_hint_y=None, height=40)
-        self.scroll_layout.add_widget(self.log_label)
+# Digital displays for other metrics - Centered
+with ui.row().classes("justify-center gap-8 mt-8 px-8"):
+    with ui.card().classes("cyber-card p-6 text-center").style("min-width: 200px;"):
+        ui.label("DISK USAGE").classes("metric-label")
+        disk_label = ui.label("---%").classes("text-4xl font-bold digital-display p-4 rounded")
+    
+    with ui.card().classes("cyber-card p-6 text-center").style("min-width: 200px;"):
+        ui.label("GPU LOAD").classes("metric-label")
+        gpu_label = ui.label("---%").classes("text-4xl font-bold digital-display p-4 rounded")
 
-        # ML Placeholder
-        self.ml_placeholder = Label(text="Future ML Models will appear here", size_hint_y=None, height=150)
-        self.scroll_layout.add_widget(self.ml_placeholder)
+ui.separator().classes("my-12").style("background: linear-gradient(90deg, transparent, rgba(0,255,255,0.4), transparent); height: 2px;")
 
-        # Bind properties
-        self.bind(connection_status=self.update_status)
-        self.bind(last_update=lambda i,v: setattr(self.log_label,'text',f"Last Update: {v}"))
-
-    def add_action_button(self, text, action, args):
-        btn = Button(text=text, size_hint_y=None, height=50)
-        btn.bind(on_press=lambda x: self.send_action(action,args))
-        self.action_layout.add_widget(btn)
-
-    def send_action(self, action, args={}):
-        # Send command to server via Socket.IO
-        if hasattr(self, 'app') and self.app.sio.connected:
-            self.app.sio.emit("action_command", {"action":action,"args":args})
-            self.log_label.text = f"Sent {action}..."
+# ------------- ACTION BUTTONS -------------
+with ui.card().classes("cyber-card p-8 mt-4 mx-8"):
+    ui.label("⚙️ ACTION CONTROL").classes("text-3xl font-bold text-center mb-8").style(
+        "color: #00ffff; font-family: 'Orbitron', monospace; text-shadow: 0 0 15px rgba(0,255,255,0.8);"
+    )
+    
+    def send_action(action, args={}):
+        if sio.connected:
+            sio.emit("action_command", {"action": action, "args": args})
+            ui.notify(f"Sent {action}", color="green")
         else:
-            self.log_label.text = "Not connected to server. Actions require server connection."
+            ui.notify("Not connected to server", color="red")
+    
+    with ui.row().classes("justify-center gap-6 flex-wrap"):
+        # Chrome Open
+        with ui.column().classes("items-center"):
+            ui.button(on_click=lambda: send_action("open_app", {"name": "chrome"})) \
+                .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
+            ui.html('''
+                <svg class="btn-icon" style="color: #4285f4; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm0 2c5.523 0 10 4.477 10 10s-4.477 10-10 10S2 17.523 2 12 6.477 2 12 2zm0 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm0 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10z"/>
+                </svg>
+            ''', sanitize=False)
+            ui.label("Open Chrome").classes("text-sm mt-2").style("color: rgba(0,255,255,0.7);")
+        
+        # Chrome Close
+        with ui.column().classes("items-center"):
+            ui.button(on_click=lambda: send_action("close_app", {"name": "chrome"})) \
+                .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
+            ui.html('''
+                <svg class="btn-icon" style="color: #ff0080; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                </svg>
+            ''', sanitize=False)
+            ui.label("Close Chrome").classes("text-sm mt-2").style("color: rgba(255,0,128,0.7);")
+        
+        # VSCode Open
+        with ui.column().classes("items-center"):
+            ui.button(on_click=lambda: send_action("open_app", {"name": "vscode"})) \
+                .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
+            ui.html('''
+                <svg class="btn-icon" style="color: #007acc; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17.5 0l-12.5 8.5L0 6v12l5 -2.5L17.5 24l6.5-3V3L17.5 0zM17.5 4.5v15L7.5 12L17.5 4.5z"/>
+                </svg>
+            ''', sanitize=False)
+            ui.label("Open VSCode").classes("text-sm mt-2").style("color: rgba(0,255,255,0.7);")
+        
+        # VSCode Close
+        with ui.column().classes("items-center"):
+            ui.button(on_click=lambda: send_action("close_app", {"name": "Code.exe"})) \
+                .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
+            ui.html('''
+                <svg class="btn-icon" style="color: #ff0080; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                </svg>
+            ''', sanitize=False)
+            ui.label("Close VSCode").classes("text-sm mt-2").style("color: rgba(255,0,128,0.7);")
+        
+        # Run Python Script
+        with ui.column().classes("items-center"):
+            ui.button(on_click=lambda: send_action("run_script", {"path": r"C:\brothereye\demo.py"})) \
+                .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
+            ui.html('''
+                <svg class="btn-icon" style="color: #00ff88; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z"/>
+                </svg>
+            ''', sanitize=False)
+            ui.label("Run Demo.py").classes("text-sm mt-2").style("color: rgba(0,255,136,0.7);")
 
-    def update_status(self, instance, value):
-        self.status_label.text = value
-        self.status_label.color = [0,1,0,1] if "Connected" in value else [1,0,0,1]
+ui.separator().classes("my-12").style("background: linear-gradient(90deg, transparent, rgba(255,0,128,0.4), transparent); height: 2px;")
 
-# ----------------------------
-# Main App
-# ----------------------------
-class BrotherEyeApp(App):
-    def __init__(self, server_url="http://localhost:8000", **kwargs):
-        super().__init__(**kwargs)
-        self.server_url = server_url
-        self.sio = socketio.Client()
-        self.setup_socketio()
+# ------------- ML SECTION -------------
+with ui.card().classes("cyber-card p-8 mx-8"):
+    ui.label("🤖 NEURAL NETWORK ANALYSIS").classes("text-3xl font-bold text-center mb-6").style(
+        "color: #ff0080; font-family: 'Orbitron', monospace; text-shadow: 0 0 15px rgba(255,0,128,0.8);"
+    )
+    
+    ml_result_label = ui.label("█ SYSTEM READY FOR ANALYSIS...\n█ Awaiting command execution...").classes("text-lg p-6 rounded ml-output").style(
+        "white-space: pre-wrap; line-height: 1.8; font-size: 18px; padding-left: 40px;"
+    )
+    
+    from pi_client.ml_analysis import run_local_ml
+    
+    def run_ml_local():
+        ml_result_label.text = "█ INITIALIZING ML...\n█ Running analysis..."
+        summary, plots = run_local_ml()
+        ml_result_label.text = summary
 
-    def build(self):
-        self.dashboard = DashboardScreen()
-        self.dashboard.app = self  # give dashboard access to self
-        return self.dashboard
+        for plot in plots:
+            if os.path.exists(plot):
+                ui.image(plot).classes("w-full rounded-xl shadow-lg mt-4")
+    
+    ui.button("▶ RUN ML ANALYSIS", on_click=run_ml_local) \
+        .props('outline size="xl"') \
+        .classes("block mx-auto mt-6 font-bold action-btn") \
+        .style(
+            "font-family: 'Orbitron', monospace; letter-spacing: 3px; padding: 16px 48px; "
+            "font-size: 18px; border-color: rgba(255,0,128,0.6); color: #ff0080;"
+        )
 
-    def setup_socketio(self):
-        @self.sio.event
-        def connect():
-            Clock.schedule_once(lambda dt: setattr(self.dashboard,'connection_status','✓ Connected'),0)
-        @self.sio.event
-        def disconnect():
-            Clock.schedule_once(lambda dt: setattr(self.dashboard,'connection_status','✗ Disconnected'),0)
-        @self.sio.on("stats_update")
-        def on_stats(data):
-            Clock.schedule_once(lambda dt: self.update_dashboard(data),0)
-        @self.sio.on("action_response")
-        def on_action_response(data):
-            Clock.schedule_once(
-                lambda dt: setattr(
-                    self.dashboard.log_label,
-                    'text',
-                    data.get('message', str(data)) if isinstance(data, dict) else str(data)
-                ),
-                0
-            )
+# ------------- AUTO-UPDATES -------------
+def refresh_ui():
+    status_label.text = connection_status
+    status_color = "#00ff88" if "Connected" in connection_status else "#ff0080"
+    status_label.style(f"background: rgba(0,0,0,0.8); border: 2px solid {status_color}; color: {status_color}; box-shadow: 0 0 20px {status_color}40;")
+    
+    cpu_percent = stats_data["cpu"]
+    mem_percent = stats_data["memory"]
+    
+    cpu_rotation = -135 + (cpu_percent * 2.7) 
+    mem_rotation = -135 + (mem_percent * 2.7)
+    
+    ui.run_javascript(f'''
+        const cpuNeedle = document.getElementById('cpu-needle');
+        const cpuValue = document.getElementById('cpu-value');
+        if (cpuNeedle) cpuNeedle.style.transform = 'translateX(-50%) rotate({cpu_rotation}deg)';
+        if (cpuValue) cpuValue.textContent = '{cpu_percent:.0f}%';
+    ''')
+    
+    ui.run_javascript(f'''
+        const memNeedle = document.getElementById('mem-needle');
+        const memValue = document.getElementById('mem-value');
+        if (memNeedle) memNeedle.style.transform = 'translateX(-50%) rotate({mem_rotation}deg)';
+        if (memValue) memValue.textContent = '{mem_percent:.0f}%';
+    ''')
+    
+    disk_label.text = f"{stats_data['disk']:.1f}%"
+    gpu_label.text = f"{stats_data['gpu']:.1f}%"
+    battery_label.text = f"{stats_data['battery']:.1f}%"
+    
+    battery_percent = stats_data['battery']
+    ui.run_javascript(f'''
+        const batteryFill = document.getElementById('battery-fill');
+        if (batteryFill) batteryFill.style.width = '{battery_percent}%';
+    ''')
+def update_action_notifications():
+    global latest_action_message
+    if latest_action_message:
+        ui.notify(latest_action_message, color="blue")
+        latest_action_message = ""  # clear after showing once
 
-    def update_dashboard(self,data):
-        self.dashboard.cpu_speedometer.value = data.get('cpu',0)
-        ram_percent = data.get('memory',0)
-        self.dashboard.ram_speedometer.value = ram_percent
-        self.dashboard.ram_readout.update(ram_percent,"%")
-        self.dashboard.disk_readout.update(data.get('disk',0),"%")
-        self.dashboard.gpu_readout.update(data.get('gpu',0),"%")
-        self.dashboard.fuel_gauge.value = data.get('battery',0)
-        self.dashboard.last_update = time.strftime("%H:%M:%S")
+ui.timer(0.5, update_action_notifications)
 
-    def on_start(self):
-        threading.Thread(target=self.connect_to_server, daemon=True).start()
+ui.timer(REFRESH_INTERVAL, refresh_ui)
 
-    def connect_to_server(self):
-        try:
-            self.sio.connect(self.server_url)
-            self.sio.wait()
-        except:
-            time.sleep(5)
-            self.connect_to_server()
-
-    def on_stop(self):
-        if self.sio.connected:
-            self.sio.disconnect()
-
-if __name__=="__main__":
-    import sys
-    server_url = sys.argv[1] if len(sys.argv)>1 else server_url
-    BrotherEyeApp(server_url=server_url).run()
+ui.run(reload=False, port=8080)
