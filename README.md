@@ -1,7 +1,7 @@
-.
 
 👁️‍🗨️ Brother Eye
 Real-Time PC System Monitor with FastAPI + Socket.IO + Python Client
+(Currently publishing a research paper on this)
 
 Brother Eye is a real-time system monitoring tool that streams live hardware stats — such as CPU usage, memory, disk, and battery levels — from a PC server to a client device (like a Raspberry Pi display or secondary monitor).
 
