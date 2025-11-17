@@ -671,14 +671,14 @@ def refresh_ui():
     
     disk_label.text = f"{stats_data['disk']:.1f}%"
     gpu_label.text = f"{stats_data['gpu']:.1f}%"
-    battery_percent = 75  # Test value
-    battery_label.text = f"{battery_percent}%"  
-    
-    # battery_percent = stats_data['battery']
+    battery_percent = stats_data['battery']
+    battery_label.text = f"{battery_percent}%"
+
     ui.run_javascript(f'''
         const batteryFill = document.getElementById('battery-fill');
         if (batteryFill) batteryFill.style.width = '{battery_percent}%';
     ''')
+
 
 def update_action_notifications():
     global latest_action_message

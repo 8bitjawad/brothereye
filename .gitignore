@@ -60,7 +60,11 @@ env/
 ENV/
 .env/
 .venv/
-
+*.env
+.env
+**/.env
+pc_server/.env
+pi_client/.env
 # Logs
 *.log
 
