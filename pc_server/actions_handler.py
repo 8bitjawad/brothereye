@@ -1,28 +1,48 @@
-import socketio
-from app_manager import open_app, close_app_by_name, run_script, open_in_vscode
-
-sio = socketio.AsyncServer(async_mode="asgi")
-
-# Map action names to app_manager functions
-ACTION_MAP = {
-    "open_vscode": lambda: open_app("vscode"),
-    "close_vscode": lambda: close_app_by_name("Code.exe"),  # Windows process
-    "open_chrome": lambda: open_app("chrome"),
-    "close_chrome": lambda: close_app_by_name("chrome.exe"),
-    "run_demo_script": lambda: run_script(r"C:\brothereye\demo.py"),
-    "open_demo_folder": lambda: open_in_vscode(r"C:\brothereye\demo_folder"),
-}
+from .main import sio
+from .app_manager import open_app, close_app_by_name, run_script, open_in_vscode
 
 @sio.on("action_command")
 async def handle_action_command(sid, data):
-    action_name = data.get("action")
-    if action_name in ACTION_MAP:
-        result = ACTION_MAP[action_name]()
-        if isinstance(result, tuple):
-            _, msg = result
+    action = data.get("action")
+    args = data.get("args", {})
+    
+    print(f"🎬 Received action: {action} with args: {args}")
+    
+    try:
+        if action == "open_app":
+            app_name = args.get("name", "")
+            success, msg = open_app(app_name)
+            
+        elif action == "close_app":
+            app_name = args.get("name", "")
+            count, msg = close_app_by_name(app_name)
+            success = count > 0
+            
+        elif action == "run_script":
+            path = args.get("path", "")
+            success, msg = run_script(path)
+            
+        elif action == "open_in_vscode":
+            path = args.get("path", "")
+            success, msg = open_in_vscode(path)
+            
         else:
-            msg = str(result)
-    else:
-        msg = f"Unknown action: {action_name}"
-
-    await sio.emit("action_response", {"message": msg}, to=sid)
+            success = False
+            msg = f"❌ Unknown action: {action}"
+        
+        # Send response back to client
+        status_icon = "✅" if success else "❌"
+        await sio.emit("action_response", {
+            "message": f"{status_icon} {msg}",
+            "success": success
+        }, to=sid)
+        
+        print(f"📤 Response sent: {msg}")
+        
+    except Exception as e:
+        error_msg = f"❌ Error executing {action}: {str(e)}"
+        print(error_msg)
+        await sio.emit("action_response", {
+            "message": error_msg,
+            "success": False
+        }, to=sid)

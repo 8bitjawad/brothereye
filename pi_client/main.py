@@ -3,13 +3,14 @@ import socketio
 import threading, time
 import os
 from dotenv import load_dotenv
+from pi_client.db_manager import init_db, insert_stats
+
 load_dotenv()
 SECRET_TOKEN = os.getenv("AUTH_TOKEN")
 
-SERVER_URL = "http://192.168.1.14:8000"  
+SERVER_URL = "http://192.168.1.15:8000"  
 REFRESH_INTERVAL = 1                     
 
-from pi_client.db_manager import init_db, insert_stats
 init_db()
 
 sio = socketio.Client()
@@ -20,7 +21,9 @@ latest_action_message = ""
 def connect_socket():
     global connection_status
     try:
-        sio.connect(SERVER_URL)
+        print("Connecting with token")
+        print(f"🌐 Server URL: {SERVER_URL}")
+        sio.connect(f"{SERVER_URL}?token={SECRET_TOKEN}")
         connection_status = "Connected"
     except Exception as e:
         print("Socket connection failed:", e)
@@ -59,6 +62,11 @@ def on_action_response(data):
 threading.Thread(target=connect_socket, daemon=True).start()
 
 # ------------- UI COMPONENTS -------------
+from nicegui import app
+import os
+
+# Serve ML images folder as static
+app.add_static_files('/ml', os.getcwd())
 
 ui.page_title("BrotherEye Dashboard")
 ui.colors(primary="#00ffff", secondary="#1a1a1a", accent="#ff0080")
@@ -260,44 +268,52 @@ ui.add_head_html('''
         100% { left: 100%; }
     }
     
-    /* Fuel Gauge Enhancement */
+    /* Fuel Gauge Enhancement - Horizontal Bar */
     .fuel-container {
+        background: #041014 !important;
+        border: 2px solid rgba(0,255,255,0.4) !important;
         width: 100%;
-        max-width: 600px;
+        max-width: 1200px;
         margin: 0 auto;
         padding: 20px;
     }
     
-    .fuel-gauge {
-        width: 100%;
-        height: 50px;
-        background: 
-            linear-gradient(to right, rgba(0,255,255,0.1), rgba(0,255,255,0.05)),
-            #0a0a0a;
-        border: 2px solid rgba(0,255,255,0.4);
-        border-radius: 25px;
-        position: relative;
-        overflow: hidden;
-        box-shadow: 
-            0 0 30px rgba(0,0,0,0.8) inset,
-            0 0 20px rgba(0,255,255,0.2);
-    }
+.fuel-gauge {
+    background: #041014 !important;
+    width: 100%;
+    height: 60px;
+    border-radius: 30px;
+    position: relative;
+    overflow: hidden;
+    box-shadow:
+        0 0 20px rgba(0,255,255,0.3),
+        inset 0 0 20px rgba(0,255,255,0.4);
+}
+
+/* The fill bar */
+.fuel-fill {
+    position: absolute;
+    top: 0;
+    left: 0;                      /* <<— IMPORTANT: Make it fill left → right */
+    height: 100%;
+    width: 100%;                  /* JS will adjust this */
     
-    .fuel-fill {
-        height: 100%;
-        background: linear-gradient(90deg, 
-            #ff0080 0%, 
-            #ff0080 30%,
-            #ffaa00 60%, 
-            #00ffff 90%,
-            #00ff88 100%);
-        transition: width 0.5s cubic-bezier(0.4, 0.0, 0.2, 1);
-        box-shadow: 0 0 30px rgba(0,255,255,0.6);
-        border-radius: 23px;
-        position: relative;
-        animation: flow 2s linear infinite;
-    }
-    
+    background: linear-gradient(
+        90deg,
+        #ff0044 0%,
+        #ff0080 20%,
+        #ffaa00 45%,
+        #00ffff 70%,
+        #00ff88 100%
+    );
+
+    border-radius: 30px;
+    box-shadow:
+        0 0 25px rgba(0,255,255,0.6),
+        0 0 40px rgba(0,255,255,0.3);
+
+    transition: width 0.6s cubic-bezier(0.4,0.0,0.2,1);
+}   
     @keyframes flow {
         0% { background-position: 0% 50%; }
         100% { background-position: 200% 50%; }
@@ -311,7 +327,7 @@ ui.add_head_html('''
         right: 0;
         bottom: 0;
         background: linear-gradient(to bottom, rgba(255,255,255,0.2), transparent);
-        border-radius: 23px;
+        border-radius: 28px;
     }
     
     /* Digital Display */
@@ -497,128 +513,135 @@ with ui.row().classes("justify-center items-center w-full mt-8 mb-4"):
             </div>
         ''', sanitize=False)
 
-# Battery Fuel Gauge - Full Width
-with ui.card().classes("cyber-card p-8 mx-8 mt-8"):
-    ui.label("⚡ POWER LEVEL").classes("text-2xl font-bold text-center mb-4").style(
-        "color: #00ffff; font-family: 'Orbitron', monospace; text-shadow: 0 0 10px rgba(0,255,255,0.8);"
-    )
-    battery_label = ui.label("---%").classes("text-5xl font-bold text-center mb-4").style(
-        "color: #00ffff; font-family: 'Orbitron', monospace; text-shadow: 0 0 20px rgba(0,255,255,0.8);"
-    )
-    with ui.row().classes("fuel-container"):
-        battery_gauge = ui.html(content='<div class="fuel-gauge"><div class="fuel-fill" id="battery-fill" style="width: 0%"></div></div>', sanitize=False)
+# Battery Fuel Gauge - Full Width Horizontal Bar
+with ui.column().classes("w-full items-center mt-8"):
+    with ui.card().classes("cyber-card p-8 w-full").style("max-width: 1400px;"):
+        ui.label("Power").classes("text-2xl font-bold text-center mb-2").style(
+            "color: #00ffff; font-family: 'Orbitron', monospace; text-shadow: 0 0 10px rgba(0,255,255,0.8);"
+        )
+        battery_label = ui.label("---%").classes("text-4xl font-bold text-center mb-4").style(
+            "color: #00ffff; font-family: 'Orbitron', monospace; text-shadow: 0 0 20px rgba(0,255,255,0.8);"
+        )
+        with ui.row().classes("fuel-container"):
+            battery_gauge = ui.html(content='<div class="fuel-gauge"><div class="fuel-fill" id="battery-fill" style="width: 0%"></div></div>', sanitize=False)
 
-# Digital displays for other metrics - Centered
-with ui.row().classes("justify-center gap-8 mt-8 px-8"):
-    with ui.card().classes("cyber-card p-6 text-center").style("min-width: 200px;"):
+# Digital displays for other metrics - Centered beneath fuel gauge
+with ui.row().classes("justify-center gap-8 mt-4 px-8 w-full"):
+    with ui.card().classes("cyber-card p-6 text-center").style("min-width: 250px;"):
         ui.label("DISK USAGE").classes("metric-label")
         disk_label = ui.label("---%").classes("text-4xl font-bold digital-display p-4 rounded")
     
-    with ui.card().classes("cyber-card p-6 text-center").style("min-width: 200px;"):
+    with ui.card().classes("cyber-card p-6 text-center").style("min-width: 250px;"):
         ui.label("GPU LOAD").classes("metric-label")
         gpu_label = ui.label("---%").classes("text-4xl font-bold digital-display p-4 rounded")
 
 ui.separator().classes("my-12").style("background: linear-gradient(90deg, transparent, rgba(0,255,255,0.4), transparent); height: 2px;")
 
-# ------------- ACTION BUTTONS -------------
-with ui.card().classes("cyber-card p-8 mt-4 mx-8"):
-    ui.label("⚙️ ACTION CONTROL").classes("text-3xl font-bold text-center mb-8").style(
-        "color: #00ffff; font-family: 'Orbitron', monospace; text-shadow: 0 0 15px rgba(0,255,255,0.8);"
-    )
-    
-    def send_action(action, args={}):
-        if sio.connected:
-            sio.emit("action_command", {"action": action, "args": args})
-            ui.notify(f"Sent {action}", color="green")
-        else:
-            ui.notify("Not connected to server", color="red")
-    
-    with ui.row().classes("justify-center gap-6 flex-wrap"):
-        # Chrome Open
-        with ui.column().classes("items-center"):
-            ui.button(on_click=lambda: send_action("open_app", {"name": "chrome"})) \
-                .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
-            ui.html('''
-                <svg class="btn-icon" style="color: #4285f4; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm0 2c5.523 0 10 4.477 10 10s-4.477 10-10 10S2 17.523 2 12 6.477 2 12 2zm0 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm0 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10z"/>
-                </svg>
-            ''', sanitize=False)
-            ui.label("Open Chrome").classes("text-sm mt-2").style("color: rgba(0,255,255,0.7);")
+# ------------- ACTION BUTTONS - CENTERED -------------
+with ui.column().classes("w-full items-center"):
+    with ui.card().classes("cyber-card p-8 mt-4").style("max-width: 1400px; width: 100%;"):
+        ui.label("Action Control").classes("text-3xl font-bold text-center mb-8").style(
+            "color: #00ffff; font-family: 'Orbitron', monospace; text-shadow: 0 0 15px rgba(0,255,255,0.8);"
+        )
         
-        # Chrome Close
-        with ui.column().classes("items-center"):
-            ui.button(on_click=lambda: send_action("close_app", {"name": "chrome"})) \
-                .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
-            ui.html('''
-                <svg class="btn-icon" style="color: #ff0080; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-                </svg>
-            ''', sanitize=False)
-            ui.label("Close Chrome").classes("text-sm mt-2").style("color: rgba(255,0,128,0.7);")
+        def send_action(action, args={}):
+            if sio.connected:
+                sio.emit("action_command", {"action": action, "args": args})
+                ui.notify(f"Sent {action}", color="green")
+            else:
+                ui.notify("Not connected to server", color="red")
         
-        # VSCode Open
-        with ui.column().classes("items-center"):
-            ui.button(on_click=lambda: send_action("open_app", {"name": "vscode"})) \
-                .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
-            ui.html('''
-                <svg class="btn-icon" style="color: #007acc; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M17.5 0l-12.5 8.5L0 6v12l5 -2.5L17.5 24l6.5-3V3L17.5 0zM17.5 4.5v15L7.5 12L17.5 4.5z"/>
-                </svg>
-            ''', sanitize=False)
-            ui.label("Open VSCode").classes("text-sm mt-2").style("color: rgba(0,255,255,0.7);")
-        
-        # VSCode Close
-        with ui.column().classes("items-center"):
-            ui.button(on_click=lambda: send_action("close_app", {"name": "Code.exe"})) \
-                .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
-            ui.html('''
-                <svg class="btn-icon" style="color: #ff0080; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-                </svg>
-            ''', sanitize=False)
-            ui.label("Close VSCode").classes("text-sm mt-2").style("color: rgba(255,0,128,0.7);")
-        
-        # Run Python Script
-        with ui.column().classes("items-center"):
-            ui.button(on_click=lambda: send_action("run_script", {"path": r"C:\brothereye\demo.py"})) \
-                .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
-            ui.html('''
-                <svg class="btn-icon" style="color: #00ff88; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M8 5v14l11-7z"/>
-                </svg>
-            ''', sanitize=False)
-            ui.label("Run Demo.py").classes("text-sm mt-2").style("color: rgba(0,255,136,0.7);")
+        with ui.row().classes("justify-center items-center gap-10 flex-wrap w-full text-center"):
+            # Chrome Open
+            with ui.column().classes("items-center text-center"):
+
+                ui.button(on_click=lambda: send_action("open_app", {"name": "chrome"})) \
+                    .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
+                ui.html('''
+                    <svg class="btn-icon" style="color: #4285f4; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm0 2c5.523 0 10 4.477 10 10s-4.477 10-10 10S2 17.523 2 12 6.477 2 12 2zm0 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm0 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10z"/>
+                    </svg>
+                ''', sanitize=False)
+                ui.label("Open Chrome").classes("text-sm mt-2").style("color: rgba(0,255,255,0.7);")
+            
+            # Chrome Close
+            with ui.column().classes("items-center text-center"):
+                ui.button(on_click=lambda: send_action("close_app", {"name": "chrome"})) \
+                    .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
+                ui.html('''
+                    <svg class="btn-icon" style="color: #ff0080; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                    </svg>
+                ''', sanitize=False)
+                ui.label("Close Chrome").classes("text-sm mt-2").style("color: rgba(255,0,128,0.7);")
+            
+            # VSCode Open
+            with ui.column().classes("items-center text-center"):
+                ui.button(on_click=lambda: send_action("open_app", {"name": "vscode"})) \
+                    .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
+                ui.html('''
+                    <svg class="btn-icon" style="color: #007acc; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M17.5 0l-12.5 8.5L0 6v12l5 -2.5L17.5 24l6.5-3V3L17.5 0zM17.5 4.5v15L7.5 12L17.5 4.5z"/>
+                    </svg>
+                ''', sanitize=False)
+                ui.label("Open VSCode").classes("text-sm mt-2").style("color: rgba(0,255,255,0.7);")
+            
+            # VSCode Close
+            with ui.column().classes("items-center text-center"):
+                ui.button(on_click=lambda: send_action("close_app", {"name": "Code.exe"})) \
+                    .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
+                ui.html('''
+                    <svg class="btn-icon" style="color: #ff0080; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                    </svg>
+                ''', sanitize=False)
+                ui.label("Close VSCode").classes("text-sm mt-2").style("color: rgba(255,0,128,0.7);")
+            
+            # Run Python Script
+            with ui.column().classes("items-center text-center"):
+                ui.button(on_click=lambda: send_action("run_script", {"path": r"C:\brothereye\demo.py"})) \
+                    .props('flat size="xl"').classes("action-btn").style("width: 100px; height: 100px;")
+                ui.html('''
+                    <svg class="btn-icon" style="color: #00ff88; margin-top: -90px; pointer-events: none;" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M8 5v14l11-7z"/>
+                    </svg>
+                ''', sanitize=False)
+                ui.label("Run Demo.py").classes("text-sm mt-2").style("color: rgba(0,255,136,0.7);")
 
 ui.separator().classes("my-12").style("background: linear-gradient(90deg, transparent, rgba(255,0,128,0.4), transparent); height: 2px;")
 
-# ------------- ML SECTION -------------
-with ui.card().classes("cyber-card p-8 mx-8"):
-    ui.label("🤖 NEURAL NETWORK ANALYSIS").classes("text-3xl font-bold text-center mb-6").style(
-        "color: #ff0080; font-family: 'Orbitron', monospace; text-shadow: 0 0 15px rgba(255,0,128,0.8);"
-    )
-    
-    ml_result_label = ui.label("█ SYSTEM READY FOR ANALYSIS...\n█ Awaiting command execution...").classes("text-lg p-6 rounded ml-output").style(
-        "white-space: pre-wrap; line-height: 1.8; font-size: 18px; padding-left: 40px;"
-    )
-    
-    from pi_client.ml_analysis import run_local_ml
-    
-    def run_ml_local():
-        ml_result_label.text = "█ INITIALIZING ML...\n█ Running analysis..."
-        summary, plots = run_local_ml()
-        ml_result_label.text = summary
+# ------------- ML SECTION - CENTERED -------------
+import time
 
-        for plot in plots:
-            if os.path.exists(plot):
-                ui.image(plot).classes("w-full rounded-xl shadow-lg mt-4")
-    
-    ui.button("▶ RUN ML ANALYSIS", on_click=run_ml_local) \
-        .props('outline size="xl"') \
-        .classes("block mx-auto mt-6 font-bold action-btn") \
-        .style(
-            "font-family: 'Orbitron', monospace; letter-spacing: 3px; padding: 16px 48px; "
-            "font-size: 18px; border-color: rgba(255,0,128,0.6); color: #ff0080;"
+with ui.column().classes("w-full items-center text-center"):
+    with ui.card().classes("cyber-card p-8").style("max-width: 1400px; width: 100%;"):
+        ui.label("Analysis and Prediction").classes("text-3xl font-bold text-center mb-6").style(
+            "color: #ff0080; font-family: 'Orbitron', monospace; text-shadow: 0 0 15px rgba(255,0,128,0.8);"
         )
+        
+        ml_result_label = ui.label("█ SYSTEM READY FOR ANALYSIS...\n█ Awaiting command execution...").classes("text-lg p-6 rounded ml-output").style(
+            "white-space: pre-wrap; line-height: 1.8; font-size: 18px; padding-left: 40px;"
+        )
+        
+        from pi_client.ml_analysis import run_local_ml
+        
+        def run_ml_local():
+            ml_result_label.text = "█ INITIALIZING ML...\n█ Running analysis..."
+            summary, plots = run_local_ml()
+            ml_result_label.text = summary
+
+            for plot in plots:
+                if os.path.exists(plot):
+                    cache_buster = int(time.time())
+                    ui.image(f"/ml/{plot}?v={cache_buster}")
+
+        ui.button("▶ RUN ML ANALYSIS", on_click=run_ml_local) \
+            .props('outline size="xl"') \
+            .classes("block mx-auto mt-6 font-bold action-btn") \
+            .style(
+                "font-family: 'Orbitron', monospace; letter-spacing: 3px; padding: 16px 48px; "
+                "font-size: 18px; border-color: rgba(255,0,128,0.6); color: #ff0080;"
+            )
 
 # ------------- AUTO-UPDATES -------------
 def refresh_ui():
@@ -648,18 +671,20 @@ def refresh_ui():
     
     disk_label.text = f"{stats_data['disk']:.1f}%"
     gpu_label.text = f"{stats_data['gpu']:.1f}%"
-    battery_label.text = f"{stats_data['battery']:.1f}%"
+    battery_percent = 75  # Test value
+    battery_label.text = f"{battery_percent}%"  
     
-    battery_percent = stats_data['battery']
+    # battery_percent = stats_data['battery']
     ui.run_javascript(f'''
         const batteryFill = document.getElementById('battery-fill');
         if (batteryFill) batteryFill.style.width = '{battery_percent}%';
     ''')
+
 def update_action_notifications():
     global latest_action_message
     if latest_action_message:
         ui.notify(latest_action_message, color="blue")
-        latest_action_message = ""  # clear after showing once
+        latest_action_message = ""
 
 ui.timer(0.5, update_action_notifications)
 
