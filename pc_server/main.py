@@ -132,8 +132,3 @@ async def disconnect(sid):
 @app.get("/api/usage")
 async def status():
     return {"message": "Monitoring active"}
-
-# ❌ REMOVE THIS - duplicate handler
-# @sio.on("action_command")
-# async def handle_action(sid, data):
-#     ...

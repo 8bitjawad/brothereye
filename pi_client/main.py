@@ -4,6 +4,9 @@ import threading, time
 import os
 from dotenv import load_dotenv
 from pi_client.db_manager import init_db, insert_stats
+from pi_client.realtime_anomaly import RealtimeAnomalyDetector
+app.storage.general['anomaly_flag'] = False
+
 
 load_dotenv()
 SECRET_TOKEN = os.getenv("AUTH_TOKEN")
@@ -13,10 +16,13 @@ REFRESH_INTERVAL = 1
 
 init_db()
 
+detector = RealtimeAnomalyDetector()
+
 sio = socketio.Client()
 stats_data = {"cpu": 0, "memory": 0, "disk": 0, "gpu": 0, "battery": 0}
 connection_status = "Disconnected"
 latest_action_message = ""
+latest_anomaly_data = None 
 
 def connect_socket():
     global connection_status
@@ -29,7 +35,7 @@ def connect_socket():
         print("Socket connection failed:", e)
         connection_status = "Disconnected"
         time.sleep(5)
-        connect_socket()
+        return
 
 @sio.event
 def connect():
@@ -45,13 +51,30 @@ def disconnect():
 def on_stats(data):
     for k in stats_data:
         stats_data[k] = data.get(k, 0)
-    insert_stats(
-        cpu=data.get('cpu', 0),
-        memory=data.get('memory', 0),
-        disk=data.get('disk', 0),
-        gpu=data.get('gpu', 0),
-        battery=data.get('battery', 0)
-    )
+
+    cpu = data.get("cpu", 0)
+    memory = data.get("memory", 0)
+    disk = data.get("disk", 0)
+    gpu = data.get("gpu", 0)
+    battery = data.get("battery", 0)
+
+    insert_stats(cpu=cpu, memory=memory, disk=disk, gpu=gpu, battery=battery)
+
+    # Check for anomaly
+    if detector.check(cpu, memory, disk, battery):
+        print("⚠️ REAL ANOMALY DETECTED!")
+        app.storage.general['anomaly_flag'] = True
+
+
+        # Store anomaly data in global variable to be displayed by UI timer
+        # global latest_anomaly_data
+        # latest_anomaly_data = {
+        #     "cpu": cpu,
+        #     "memory": memory,
+        #     "disk": disk,
+        #     "battery": battery,
+        #     "timestamp": time.strftime('%H:%M:%S')
+        # }
 
 @sio.on("action_response")
 def on_action_response(data):
@@ -59,11 +82,23 @@ def on_action_response(data):
     latest_action_message = data.get("message", str(data))
     print(f"Action Response Received: {latest_action_message}")
 
-threading.Thread(target=connect_socket, daemon=True).start()
+socket_started = False
+
+def delayed_start():
+    global socket_started
+    if not socket_started:
+        socket_started = True
+        print("Starting socket connection (one-shot)")
+        threading.Thread(target=connect_socket, daemon=True).start()
+
+ui.timer(0.1, delayed_start, once=True)
 
 # ------------- UI COMPONENTS -------------
 from nicegui import app
 import os
+
+def show_anomaly_alert():
+    ui.notify("⚠️ System anomaly detected!", color="red", position="top", close_button=True)
 
 # Serve ML images folder as static
 app.add_static_files('/ml', os.getcwd())
@@ -466,7 +501,7 @@ ui.add_head_html('''
 # Header with cyberpunk styling
 with ui.header().classes("cyber-header"):
     with ui.row().classes("w-full justify-between items-center p-4"):
-        ui.label("⚡ BROTHEREYE").classes("text-4xl font-bold tracking-widest glitch").style(
+        ui.label("🧿 BROTHEREYE").classes("text-4xl font-bold tracking-widest glitch").style(
             "color: #00ffff; text-shadow: 0 0 20px rgba(0,255,255,0.8), 2px 2px 0 #ff0080; font-family: 'Orbitron', monospace;"
         )
         status_label = ui.label(connection_status).classes("text-lg font-semibold px-6 py-2 rounded-lg").style(
@@ -642,8 +677,18 @@ with ui.column().classes("w-full items-center text-center"):
                 "font-family: 'Orbitron', monospace; letter-spacing: 3px; padding: 16px 48px; "
                 "font-size: 18px; border-color: rgba(255,0,128,0.6); color: #ff0080;"
             )
-
+    
 # ------------- AUTO-UPDATES -------------
+def check_anomaly_flag():
+    if app.storage.general.get('anomaly_flag'):
+        ui.notify("⚠️ System anomaly detected!",
+                  color="red",
+                  position="top",
+                  close_button=True)
+        app.storage.general['anomaly_flag'] = False  # reset flag
+
+ui.timer(0.2, check_anomaly_flag)
+
 def refresh_ui():
     status_label.text = connection_status
     status_color = "#00ff88" if "Connected" in connection_status else "#ff0080"
@@ -678,6 +723,27 @@ def refresh_ui():
         const batteryFill = document.getElementById('battery-fill');
         if (batteryFill) batteryFill.style.width = '{battery_percent}%';
     ''')
+def update_anomaly_notifications():
+    global latest_anomaly_data
+    if latest_anomaly_data:
+        # Show UI notification
+        ui.notify(
+            f"⚠️ ANOMALY: CPU={latest_anomaly_data['cpu']:.0f}% MEM={latest_anomaly_data['memory']:.0f}%",
+            color="negative",
+            position="top",
+            timeout=10000,
+            type="negative"
+        )
+        
+        # Update ML output box
+        ml_result_label.text = (
+            f"█ ⚠️ ANOMALY DETECTED!\n"
+            f"█ CPU: {latest_anomaly_data['cpu']:.1f}% | Memory: {latest_anomaly_data['memory']:.1f}%\n"
+            f"█ Disk: {latest_anomaly_data['disk']:.1f}% | Battery: {latest_anomaly_data['battery']:.1f}%\n"
+            f"█ Time: {latest_anomaly_data['timestamp']}"
+        )
+        
+        latest_anomaly_data = None
 
 
 def update_action_notifications():
@@ -686,8 +752,8 @@ def update_action_notifications():
         ui.notify(latest_action_message, color="blue")
         latest_action_message = ""
 
-ui.timer(0.5, update_action_notifications)
-
 ui.timer(REFRESH_INTERVAL, refresh_ui)
+ui.timer(0.5, update_action_notifications)
+ui.timer(0.5, update_anomaly_notifications)
 
 ui.run(reload=False, port=8080)

@@ -3,15 +3,11 @@ import matplotlib
 matplotlib.use("Agg")
 import sqlite3
 import matplotlib.pyplot as plt
-from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
-from sklearn.metrics import r2_score, silhouette_score
+from sklearn.metrics import silhouette_score
 import os
 
-# ================================
-# 🔥 Cyberpunk Theme Setup
-# ================================
 plt.style.use("dark_background")
 
 CYAN = "#00ffff"
@@ -19,9 +15,6 @@ MAGENTA = "#ff0080"
 SOFT_GRID = (0.2, 0.2, 0.2, 0.3)  # subtle grid lines
 
 
-# ================================
-# ✨ Neon Glow Helper Function
-# ================================
 def neon_glow(ax, x, y, color, glow_radius=10):
     """Draw neon glow lines by layering thick low-alpha lines under the main line."""
     for i in range(glow_radius, 0, -1):
@@ -38,10 +31,11 @@ def neon_glow(ax, x, y, color, glow_radius=10):
     )
 
 
-# ================================
-# ⚡ Main ML Analysis Function
-# ================================
-def run_local_ml():
+def run_local_ml(days=3):
+    """
+    Perform KMeans clustering on the last N days of system usage data
+    to determine load distribution (Idle / Moderate / High Load).
+    """
 
     # -------- Load SQLite Data --------
     conn = sqlite3.connect("usage_log.db")
@@ -52,24 +46,24 @@ def run_local_ml():
         return "⚠️ Not enough data to run ML yet.", []
 
     # -------- Preprocessing --------
-    df["timestamp"] = pd.to_datetime(df["timestamp"], format="mixed", errors="coerce")
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+
+    # Filter for only the last N days
+    from datetime import datetime, timedelta
+    min_date = datetime.now() - timedelta(days=days)
+    df = df[df["timestamp"] >= min_date]
+
+    if df.empty or len(df) < 10:
+        return f"⚠️ Not enough data in the last {days} days to run ML.", []
+
+    # Resample to 1-minute averages for stability
     df = df.set_index("timestamp").resample("1min").mean(numeric_only=True).dropna()
 
     if len(df) < 5:
         return "⚠️ Not enough samples after resampling.", []
 
-    # -------- Build Regression Target --------
-    df["cpu_next"] = df["cpu"].shift(-1)
-    df = df.dropna()
-
+    # -------- Features --------
     X = df[["cpu", "memory", "disk", "battery"]]
-    y = df["cpu_next"]
-
-    # -------- Linear Regression --------
-    lr = LinearRegression().fit(X, y)
-    y_pred = lr.predict(X)
-    r2 = r2_score(y, y_pred)
-    predicted_next = float(lr.predict([X.iloc[-1]])[0])
 
     # -------- KMeans Clustering --------
     scaler = StandardScaler()
@@ -80,43 +74,43 @@ def run_local_ml():
 
     sil = silhouette_score(X_scaled, labels)
 
-    # ================================
-    # 🔥 PLOT 1: NEON REGRESSION
-    # ================================
-    lr_plot_path = "ml_lr_plot.png"
-
-    fig, ax = plt.subplots(figsize=(6, 4))
-
-    neon_glow(ax, df.index, y, CYAN)        # actual CPU
-    neon_glow(ax, df.index, y_pred, MAGENTA)  # predicted CPU
-
-    ax.set_title("CPU Prediction (Neon Regression)", color=CYAN, fontsize=14, pad=15)
-    ax.set_xlabel("Time", color=CYAN)
-    ax.set_ylabel("CPU (%)", color=CYAN)
-    ax.legend(
-        ["Actual CPU", "Predicted CPU"],
-        facecolor="#111111",
-        edgecolor=CYAN
+    # =====================================
+    #  SMART CLUSTER NAMING (CPU + MEMORY)
+    # =====================================
+    cluster_scores = (
+        0.7 * df["cpu"].groupby(labels).mean() +
+        0.3 * df["memory"].groupby(labels).mean()
     )
 
-    ax.grid(color=SOFT_GRID)
-    ax.tick_params(colors="#AAAAAA", rotation=45)
-    ax.xaxis.set_major_locator(plt.MaxNLocator(6))
+    # Sort clusters by load score
+    sorted_clusters = cluster_scores.sort_values().index.tolist()
 
-    plt.tight_layout()
-    plt.savefig(lr_plot_path, dpi=150)
-    plt.close()
+    cluster_names = {
+        sorted_clusters[0]: "Idle",
+        sorted_clusters[1]: "Moderate",
+        sorted_clusters[2]: "High Load"
+    }
 
+    # =====================================
+    #  USAGE DISTRIBUTION PERCENTAGES
+    # =====================================
+    counts = pd.Series(labels).value_counts()
+    total = len(labels)
+    percentages = (counts / total * 100).round(2)
 
-    # ================================
-    # 🔥 PLOT 2: NEON KMEANS SCATTER
-    # ================================
+    usage_summary = "\n".join(
+        f"- {cluster_names[c]}: {percentages[c]}%"
+        for c in sorted_clusters
+    )
+
+    # =====================================
+    #  PLOT — NEON KMEANS (CPU vs Memory)
+    # =====================================
     km_plot_path = "ml_kmeans_plot.png"
 
     plt.figure(figsize=(5, 4))
     plt.scatter(
-        X["cpu"],
-        X["memory"],
+        X["cpu"], X["memory"],
         c=labels,
         cmap="cool",
         s=70,
@@ -132,23 +126,20 @@ def run_local_ml():
     plt.grid(color=SOFT_GRID)
     plt.xticks(color="#AAAAAA")
     plt.yticks(color="#AAAAAA")
-
     plt.tight_layout()
     plt.savefig(km_plot_path, dpi=150)
     plt.close()
 
-
-    # ================================
-    # 📊 Generate Text Summary
-    # ================================
+    # =====================================
+    #  SUMMARY
+    # =====================================
     summary = (
-        "📊 **Neon ML Analysis Summary**\n\n"
-        f"• **Regression R² Score:** `{r2:.3f}`\n"
-        f"• **Cluster Silhouette Score:** `{sil:.3f}`\n"
-        f"• **Predicted next-minute CPU:** `{predicted_next:.2f}%`\n\n"
-        "🖼 **Neon Visualizations Saved:**\n"
-        f" → `{lr_plot_path}` (Regression)\n"
-        f" → `{km_plot_path}` (KMeans Clustering)"
+        f"Predictions / Analysis Summary (Last {days} Days)\n\n"
+        f"Cluster Silhouette Score: `{sil:.3f}`\n\n"
+        f"Usage Distribution (last 3 days):\n"
+        f"{usage_summary}\n\n"
+        "🖼 Visualization Saved:\n"
+        f" → `{km_plot_path}` (KMeans Clustering)\n"
     )
 
-    return summary, [lr_plot_path, km_plot_path]
+    return summary, [km_plot_path]
