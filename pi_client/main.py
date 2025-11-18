@@ -5,8 +5,8 @@ import os
 from dotenv import load_dotenv
 from pi_client.db_manager import init_db, insert_stats
 from pi_client.realtime_anomaly import RealtimeAnomalyDetector
-app.storage.general['anomaly_flag'] = False
 
+app.storage.general['anomaly_flag'] = False
 
 load_dotenv()
 SECRET_TOKEN = os.getenv("AUTH_TOKEN")

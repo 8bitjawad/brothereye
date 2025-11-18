@@ -1,4 +1,3 @@
-# realtime_anomaly.py
 import pandas as pd
 import joblib
 import numpy as np
@@ -9,6 +8,7 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "iso_model.pkl")
 SCALER_PATH = os.path.join(BASE_DIR, "scaler.pkl")
+THRESH_PATH = os.path.join(BASE_DIR, "threshold.pkl")
 
 class RealtimeAnomalyDetector:
     def reset(self):
@@ -16,26 +16,30 @@ class RealtimeAnomalyDetector:
         self.mem_s.last = None
         self.disk_s.last = None
         self.batt_s.last = None
+        self.score_history.clear()
         self.debouncer.history.clear()
 
     def __init__(self):
+        # Load trained components
         self.iso = joblib.load(MODEL_PATH)
         self.scaler = joblib.load(SCALER_PATH)
+        self.threshold = joblib.load(THRESH_PATH)
 
-        # smoothers for each metric
+        # EWMAs
         self.cpu_s = EWMASmoother(alpha=0.4)
         self.mem_s = EWMASmoother(alpha=0.4)
         self.disk_s = EWMASmoother(alpha=0.4)
         self.batt_s = EWMASmoother(alpha=0.4)
 
-        # debounce: last 3 predictions → 2 anomalies required
+        # Debouncer (2/3 rule)
         self.debouncer = AnomalyDebouncer(window=3, required=2)
 
-    # In realtime_anomaly.py - modify the check method:
-
-    # In realtime_anomaly.py - replace the entire check method:
+        # Keep last ~300 scores for optional dynamic thresholding
+        self.score_history = []
+        self.history_limit = 300  # ~5 minutes at 1 second interval
 
     def check(self, cpu, memory, disk, battery):
+        # Smooth input values
         cpu_s = self.cpu_s.update(cpu)
         mem_s = self.mem_s.update(memory)
         disk_s = self.disk_s.update(disk)
@@ -49,24 +53,39 @@ class RealtimeAnomalyDetector:
         }])
 
         X_scaled = self.scaler.transform(df)
-        
-        # Use score instead of prediction
+
+        # IF score (lower => more anomalous)
         anomaly_score = self.iso.score_samples(X_scaled)[0]
-        
-        # Lower threshold = more sensitive to anomalies
-        # Scores below -0.55 are considered anomalies
-        anomaly = (anomaly_score < -0.55)
-        
-        # Debug logging
-        print(f"📊 CPU={cpu:.1f}% (smoothed={cpu_s:.1f}%) | MEM={memory:.1f}% (smoothed={mem_s:.1f}%)")
-        print(f"   Score={anomaly_score:.4f} | Anomaly={anomaly}")
-        
-        if anomaly:
-            print(f"🚨 RAW ANOMALY: Score {anomaly_score:.4f} is below threshold -0.55")
-        
+
+        # Store score history for drift adaptation
+        self.score_history.append(anomaly_score)
+        if len(self.score_history) > self.history_limit:
+            self.score_history.pop(0)
+
+        # Use trained threshold as primary cutoff
+        dynamic_threshold = self.threshold
+
+        # Optional: adaptive threshold if system drifts significantly
+        if len(self.score_history) > 50:
+            # Look at lower extreme (3rd percentile of recent scores)
+            drift_low = np.percentile(self.score_history, 3)
+            # Choose the SAFER one (less sensitive)
+            dynamic_threshold = min(dynamic_threshold, drift_low)
+
+        # Determine anomaly
+        anomaly = anomaly_score < dynamic_threshold
+
+        # Debug (enable while tuning)
+        print(
+            f"Score={anomaly_score:.4f}, "
+            f"Thresh={dynamic_threshold:.4f}, "
+            f"A={anomaly}"
+        )
+
+        # Debounced result
         final = self.debouncer.add(anomaly)
-        
+
         if final:
-            print(f"🔴 DEBOUNCED ANOMALY TRIGGERED!")
-        
+            print("🔴 DEBOUNCED ANOMALY TRIGGERED!")
+
         return final

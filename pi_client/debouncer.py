@@ -3,7 +3,7 @@
 from collections import deque
 
 class AnomalyDebouncer:
-    def __init__(self, window=3, required=2):
+    def __init__(self, window=5, required=3):
         self.history = deque(maxlen=window)
         self.required = required
 
